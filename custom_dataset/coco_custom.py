@@ -1,76 +1,72 @@
+import numpy as np
 import torch
 from torchvision.datasets.coco import CocoDetection
-import numpy as np
 from PIL import Image
 
+class AlbumentationsWrapper:
+    def __init__(self, transform):
+        self.transform = transform
 
-class AlbumentationsCompose:
-    def __init__(self, aug):
-        self.aug = aug
+    def __call__(self, image, target):
+        # Convert PIL to NumPy
+        image = np.array(image)
 
-    def __call__(self, image, anns):
         boxes = []
         labels = []
 
-        for ann in anns:
-            xmin, ymin, w, h = ann['bbox']
-            xmax = xmin + w
-            ymax = ymin + h
-            boxes.append([xmin, ymin, xmax, ymax])
-            labels.append(ann['category_id'])
+        for obj in target:
+            x_min, y_min, w, h = obj['bbox']
+            x_max = x_min + w
+            y_max = y_min + h
+            boxes.append([x_min, y_min, x_max, y_max])
+            labels.append(obj['category_id'])
 
-        if isinstance(image, Image.Image):
-            image = np.array(image)
-
-        # Apply Albumentations transform
-        transformed = self.aug(
+        transformed = self.transform(
             image=image,
             bboxes=boxes,
             class_labels=labels
         )
 
-        image = transformed['image']
-        boxes = transformed['bboxes']
-        labels = transformed['class_labels']
+        image = transformed["image"]
+        boxes = torch.tensor(transformed["bboxes"], dtype=torch.float32)
+        labels = torch.tensor(transformed["class_labels"], dtype=torch.int64)
 
-        # Build target in PyTorch format
-        target = {
-            'boxes': torch.tensor(boxes, dtype=torch.float32),
-            'labels': torch.tensor(labels, dtype=torch.int64)
+        new_target = {
+            "boxes": boxes,
+            "labels": labels,
         }
 
-        return image, target
+        return image, new_target
+
 
 
 class CocoCarDamageDataset(CocoDetection):
-    def __init__(self, img_folder, ann_file, transforms=None, duplicate=False):
-        super().__init__(img_folder, ann_file)
-        self.transforms = transforms
-        self.duplicate = duplicate
-        self.ids = self.ids * 2 if duplicate else self.ids
+    def __init__(self, image_dir, ann_file, transform=None):
+        super().__init__(image_dir, ann_file)
+        self.transform = transform
 
     def __getitem__(self, idx):
-        img_id = self.ids[idx]
         image, anns = super().__getitem__(idx)
 
-        if self.transforms:
-            image, target = self.transforms(image, anns)
+        # Convert COCO annotations into expected format
+        if self.transform:
+            image, target = self.transform(image, anns)
         else:
-            # fallback for no transforms
             boxes = []
             labels = []
             for ann in anns:
-                xmin, ymin, w, h = ann['bbox']
-                xmax = xmin + w
-                ymax = ymin + h
-                boxes.append([xmin, ymin, xmax, ymax])
-                labels.append(ann['category_id'])
+                x, y, w, h = ann["bbox"]
+                boxes.append([x, y, x + w, y + h])
+                labels.append(ann["category_id"])
 
+            image = ToTensorV2()(image=np.array(image))["image"]
             target = {
-                'boxes': torch.tensor(boxes, dtype=torch.float32),
-                'labels': torch.tensor(labels, dtype=torch.int64)
+                "boxes": torch.tensor(boxes, dtype=torch.float32),
+                "labels": torch.tensor(labels, dtype=torch.int64)
             }
 
-        target['image_id'] = torch.tensor([img_id])
+        # Add image_id
+        image_id = self.ids[idx]
+        target["image_id"] = torch.tensor([image_id])
 
         return image, target
