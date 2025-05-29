@@ -1,6 +1,9 @@
 import torch
 from torchvision.datasets.coco import CocoDetection
-from torchvision import transforms as T
+from albumentations.pytorch import ToTensorV2
+import albumentations as A
+import numpy as np
+from PIL import Image
 
 class CocoCarDamageDataset(CocoDetection):
     def __init__(self, img_folder, ann_file, transforms=None, duplicate=False):
@@ -11,28 +14,26 @@ class CocoCarDamageDataset(CocoDetection):
 
     def __getitem__(self, idx):
         img_id = self.ids[idx]
-        img, anns = super().__getitem__(idx)
+        image, anns = super().__getitem__(idx)
+        image = np.array(image)
+
         boxes = []
         labels = []
-
         for ann in anns:
             xmin, ymin, w, h = ann['bbox']
             boxes.append([xmin, ymin, xmin + w, ymin + h])
             labels.append(ann['category_id'])
 
         target = {
-            'boxes': torch.tensor(boxes, dtype=torch.float32),
-            'labels': torch.tensor(labels, dtype=torch.int64),
-            'image_id': torch.tensor([img_id])
+            'boxes': boxes,
+            'labels': labels
         }
 
+        # Albumentations expects boxes in Pascal VOC format [x_min, y_min, x_max, y_max]
         if self.transforms:
-            img = self.transforms(img)
+            transformed = self.transforms(image=image, bboxes=target['boxes'], class_labels=target['labels'])
+            image = transformed['image']
+            target['boxes'] = torch.tensor(transformed['bboxes'], dtype=torch.float32)
+            target['labels'] = torch.tensor(transformed['class_labels'], dtype=torch.int64)
 
-        return img, target
-
-def get_transforms(train=True):
-    t = [T.ToTensor()]
-    if train:
-        t.extend([T.RandomHorizontalFlip(0.5), T.ColorJitter(brightness=0.2, contrast=0.2)])
-    return T.Compose(t)
+        return image, target
