@@ -1,8 +1,7 @@
 import torch
 from torchvision.datasets.coco import CocoDetection
-from albumentations.pytorch import ToTensorV2
-import albumentations as A
 import numpy as np
+from albumentations.pytorch import ToTensorV2
 from PIL import Image
 
 class CocoCarDamageDataset(CocoDetection):
@@ -15,25 +14,34 @@ class CocoCarDamageDataset(CocoDetection):
     def __getitem__(self, idx):
         img_id = self.ids[idx]
         image, anns = super().__getitem__(idx)
-        image = np.array(image)
+        image = np.array(image)  # Convert PIL to NumPy array for Albumentations
 
         boxes = []
         labels = []
+
         for ann in anns:
             xmin, ymin, w, h = ann['bbox']
-            boxes.append([xmin, ymin, xmin + w, ymin + h])
+            xmax = xmin + w
+            ymax = ymin + h
+            boxes.append([xmin, ymin, xmax, ymax])
             labels.append(ann['category_id'])
 
-        target = {
-            'boxes': boxes,
-            'labels': labels
-        }
-
-        # Albumentations expects boxes in Pascal VOC format [x_min, y_min, x_max, y_max]
+        # Albumentations expects list of bboxes and labels
         if self.transforms:
-            transformed = self.transforms(image=image, bboxes=target['boxes'], class_labels=target['labels'])
-            image = transformed['image']
-            target['boxes'] = torch.tensor(transformed['bboxes'], dtype=torch.float32)
-            target['labels'] = torch.tensor(transformed['class_labels'], dtype=torch.int64)
+            transformed = self.transforms(
+                image=image,
+                bboxes=boxes,
+                class_labels=labels
+            )
+            image = transformed["image"]
+            boxes = transformed["bboxes"]
+            labels = transformed["class_labels"]
+
+        # Convert to tensors for PyTorch model
+        target = {
+            "boxes": torch.tensor(boxes, dtype=torch.float32),
+            "labels": torch.tensor(labels, dtype=torch.int64),
+            "image_id": torch.tensor([img_id])
+        }
 
         return image, target
